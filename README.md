@@ -32,6 +32,19 @@ ever been shared in a chat or online, regenerate it.
 2. Gear icon → set **your city** so briefings know where you are.
 3. Allow microphone access. Tap the reactor core and talk.
 
+## If you see "network error" with an NVIDIA key — the 2-minute relay fix
+NVIDIA's servers refuse *direct* connections from phone browsers. The included
+`worker.js` is a tiny free relay that fixes this permanently:
+
+1. Create a free account at https://dash.cloudflare.com
+2. In the left menu: **Workers & Pages → Create → Create Worker → Deploy** (accept the default).
+3. Click **Edit code**, delete everything, paste the full contents of `worker.js`, click **Deploy**.
+4. Copy your worker's URL (looks like `https://jarvis-relay.YOUR-NAME.workers.dev`).
+5. In JARVIS: **gear icon → NVIDIA relay URL** → paste it → Apply. Done — chat works.
+
+Your API key passes only through YOUR relay, never anyone else's server.
+(Do NOT upload worker.js to the GitHub repo — it isn't part of the app; Cloudflare hosts it.)
+
 ## Good to know
 - All data (key, chats, tasks, notes) lives only on your phone. Visitors to your
   link get an empty JARVIS and would need their own key.

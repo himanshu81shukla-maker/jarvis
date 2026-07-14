@@ -239,12 +239,12 @@
     position:fixed;inset:auto 0 0 0;margin:0 auto;z-index:var(--z-sheet);
   }
   dialog#settings::backdrop{background:rgba(2,6,10,.7);backdrop-filter:blur(2px)}
-  .sheet{background:var(--panel-2);border:1px solid var(--line-strong);border-bottom:0;border-radius:18px 18px 0 0;padding:18px 18px calc(20px + var(--sab))}
+  .sheet{background:var(--panel-2);border:1px solid var(--line-strong);border-bottom:0;border-radius:18px 18px 0 0;padding:18px 18px calc(20px + var(--sab));max-height:86vh;overflow-y:auto;overscroll-behavior:contain}
   .sheet h2{font:600 12px/1.2 var(--font-ui);letter-spacing:.3em;text-transform:uppercase;color:var(--cyan);margin-bottom:16px;display:flex;align-items:center}
   .sheet h2 button{margin-left:auto;color:var(--muted);padding:8px;margin-top:-8px;margin-right:-8px}
   .field{margin-bottom:14px}
   .field label{display:block;font:500 9.5px/1 var(--font-data);letter-spacing:.2em;text-transform:uppercase;color:var(--muted);margin-bottom:7px}
-  .field input[type=text],.field select{width:100%;background:var(--bg);border:1px solid var(--line);border-radius:10px;padding:11px 13px;min-height:44px}
+  .field input[type=text],.field input[type=password],.field select{width:100%;background:var(--bg);border:1px solid var(--line);border-radius:10px;padding:11px 13px;min-height:44px;color:var(--ink)}
   .field input:focus,.field select:focus{border-color:var(--line-strong);outline:none}
   .toggle-row{display:flex;align-items:center;justify-content:space-between;padding:12px 0;border-top:1px solid var(--line)}
   .toggle-row span{font-size:14px}
@@ -420,8 +420,9 @@
     <div class="field"><label for="setName">How JARVIS addresses you</label><input type="text" id="setName" placeholder="e.g. sir, boss, Priya…"></div>
     <div class="field"><label for="setCity">Your city (for briefings)</label><input type="text" id="setCity" placeholder="e.g. Varanasi"></div>
     <div class="field" id="keyField" hidden><label for="setKey">API key — Anthropic or NVIDIA (stays on this device)</label><input type="password" id="setKey" placeholder="sk-ant-… or nvapi-…" autocomplete="off"></div>
+    <div class="field" id="relayField" hidden><label for="setRelay">NVIDIA relay URL (fixes "network error" — see README)</label><input type="text" id="setRelay" placeholder="https://jarvis-relay.YOUR-NAME.workers.dev" autocomplete="off"></div>
     <div class="field" id="modelField" hidden><label for="setModel">NVIDIA model (blank = Llama 3.3 70B)</label><input type="text" id="setModel" placeholder="meta/llama-3.3-70b-instruct" autocomplete="off"></div>
-    <div class="field"><label for="setVoice">Voice</label><select id="setVoice"><option value="">System default</option></select></div>
+    <div class="field"><label for="setVoice">Voice</label><div style="display:flex;gap:8px"><select id="setVoice" style="flex:1;min-width:0"><option value="">Auto (recommended)</option></select><button class="cbtn" id="voiceTest" aria-label="Preview selected voice"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><polygon points="6 3 20 12 6 21 6 3"/></svg></button></div></div>
     <div class="toggle-row"><span>Spoken replies</span><button class="switch" id="setSpeak" role="switch" aria-checked="true" aria-label="Toggle spoken replies"></button></div>
     <button class="save-btn" id="settingsSave">Apply</button>
     <button class="danger-btn" id="wipeBtn">Wipe all data</button>
@@ -445,7 +446,7 @@ const CLAUDE_ENV = typeof window.storage !== 'undefined';   // running inside cl
 const STANDALONE = !CLAUDE_ENV;                              // installed app / hosted PWA
 let storageOK = true;
 let state = {
-  profile: { name:'', city:'', speak:true, voiceURI:'', apiKey:'', model:'' },
+  profile: { name:'', city:'', speak:true, voiceURI:'', apiKey:'', model:'', relay:'' },
   tasks: [],            // {id,title,due,done,notified,byAI,created}
   notes: [],            // {id,text,byAI,created}
   chat:  [],            // {role:'user'|'assistant', content, alert?}
@@ -602,7 +603,8 @@ async function callClaude(messages, {tools=null, system=null, maxTokens=1000} = 
     const nimMessages = system ? [{role:'system', content:system}, ...messages] : messages;
     let res;
     try{
-      res = await fetch('https://integrate.api.nvidia.com/v1/chat/completions', {
+      const endpoint = (state.profile.relay || '').trim() || 'https://integrate.api.nvidia.com/v1/chat/completions';
+      res = await fetch(endpoint, {
         method:'POST',
         headers:{ 'Content-Type':'application/json', 'Accept':'application/json',
                   'Authorization':'Bearer ' + state.profile.apiKey },
@@ -702,7 +704,10 @@ async function send(text, {spoken=false} = {}){
     const opts = {system: personaPrompt(), maxTokens:1600};
     if(provider() !== 'nvidia') opts.tools = [{type:'web_search_20250305', name:'web_search'}];
     try{ raw = await callClaude(history, opts); }
-    catch(e1){ await new Promise(r=>setTimeout(r,900)); raw = await callClaude(history, opts); }
+    catch(e1){
+      if(e1.message === 'AUTH' || e1.message === 'CORS') throw e1;   // retrying won't help these
+      await new Promise(r=>setTimeout(r,900)); raw = await callClaude(history, opts);
+    }
     const {text: reply, actions} = extractActions(raw);
     const executed = runActions(actions);
     think.remove();
@@ -715,7 +720,7 @@ async function send(text, {spoken=false} = {}){
     const msg = (e && e.message === 'AUTH')
       ? 'The mainframe rejected the API key. Check it in settings — Anthropic keys start with "sk-ant-", NVIDIA keys with "nvapi-".'
       : (e && e.message === 'CORS')
-      ? 'The NVIDIA endpoint refused a direct browser connection. Check your network and retry — if it persists, an Anthropic key connects reliably from phones.'
+      ? 'NVIDIA blocks direct connections from phone browsers. One-time fix: set up the free relay (worker.js + README in your app folder, ~2 minutes) and paste its URL in **settings → NVIDIA relay URL**.'
       : 'Connection to the mainframe failed — check your network and try again.';
     pushMsg({role:'assistant', alert:true, content: msg});
     setTimeout(()=> setCore('idle'), 2200);
@@ -776,7 +781,7 @@ function loadVoices(){
   voices = speechSynthesis.getVoices();
   const sel = $('#setVoice');
   const cur = state.profile.voiceURI;
-  sel.innerHTML = '<option value="">System default</option>' + voices
+  sel.innerHTML = '<option value="">Auto (recommended)</option>' + voices
     .filter(v => v.lang.startsWith('en'))
     .map(v => `<option value="${esc(v.voiceURI)}" ${v.voiceURI===cur?'selected':''}>${esc(v.name)} (${esc(v.lang)})</option>`).join('');
 }
@@ -789,10 +794,21 @@ function pickVoice(){
     const v = voices.find(v=>v.voiceURI === state.profile.voiceURI);
     if(v) return v;
   }
-  return voices.find(v=>/en-GB/i.test(v.lang) && /male|daniel|arthur|george/i.test(v.name))
-      || voices.find(v=>/Google UK English Male/i.test(v.name))
-      || voices.find(v=>/en-GB/i.test(v.lang))
-      || voices.find(v=>v.lang.startsWith('en')) || null;
+  /* score voices so Android (Google TTS names like "English (United Kingdom)")
+     and desktop both land on a composed British-leaning voice */
+  const score = v => {
+    const n = (v.name + ' ' + v.lang).toLowerCase(); let p = 0;
+    if(/en-gb|united kingdom|british/.test(n)) p += 5;
+    if(/daniel|arthur|george|brian|ryan|oliver/.test(n)) p += 3;
+    if(/\bmale\b/.test(n)) p += 2;
+    if(/google|natural|neural/.test(n)) p += 2;
+    if(/en-in|india/.test(n)) p += 1;
+    if(v.localService) p += 1;
+    if(/female|zira|susan|catherine/.test(n)) p -= 2;
+    return p;
+  };
+  const en = voices.filter(v => v.lang && v.lang.toLowerCase().startsWith('en'));
+  return en.sort((a,b)=>score(b)-score(a))[0] || voices[0] || null;
 }
 function stripForSpeech(t){
   return t.replace(/```[\s\S]*?```/g,' code omitted. ').replace(/[*_`#>|]/g,'').replace(/\[\[ACTION[\s\S]*?\]\]/g,'').replace(/https?:\/\/\S+/g,' a link ').trim();
@@ -990,13 +1006,24 @@ const dlg = $('#settings');
 $('#settingsBtn').addEventListener('click', () => {
   $('#keyField').hidden = !STANDALONE;
   $('#modelField').hidden = !STANDALONE;
+  $('#relayField').hidden = !STANDALONE;
   $('#setKey').value = state.profile.apiKey || '';
   $('#setModel').value = state.profile.model || '';
+  $('#setRelay').value = state.profile.relay || '';
   $('#setName').value = state.profile.name;
   $('#setCity').value = state.profile.city;
   $('#setSpeak').setAttribute('aria-checked', String(state.profile.speak));
   loadVoices();
   dlg.showModal();
+});
+$('#voiceTest').addEventListener('click', () => {
+  if(!('speechSynthesis' in window)){ toast('Speech not supported in this browser', 'gold'); return; }
+  loadVoices();
+  const u = new SpeechSynthesisUtterance('Good evening. I am JARVIS — this is the voice you have selected.');
+  const v = voices.find(v => v.voiceURI === $('#setVoice').value);
+  if(v) u.voice = v; else { const a = pickVoice(); if(a) u.voice = a; }
+  u.rate = 1.02; u.pitch = 0.92;
+  speechSynthesis.cancel(); speechSynthesis.speak(u);
 });
 $('#settingsClose').addEventListener('click', ()=> dlg.close());
 dlg.addEventListener('click', e => { if(e.target === dlg) dlg.close(); });
@@ -1008,7 +1035,7 @@ $('#settingsSave').addEventListener('click', () => {
   state.profile.city = $('#setCity').value.trim();
   state.profile.speak = $('#setSpeak').getAttribute('aria-checked') === 'true';
   state.profile.voiceURI = $('#setVoice').value;
-  if(STANDALONE){ state.profile.apiKey = $('#setKey').value.trim(); state.profile.model = $('#setModel').value.trim(); }
+  if(STANDALONE){ state.profile.apiKey = $('#setKey').value.trim(); state.profile.model = $('#setModel').value.trim(); state.profile.relay = $('#setRelay').value.trim(); }
   renderProfile(); scheduleSave(); dlg.close(); toast('Calibration applied');
 });
 let wipeArmed = false, wipeT;
